@@ -1,30 +1,35 @@
-data "tls_certificate" "github" {
+# ============================================================
+# GitHub Actions OIDC Provider
+# ============================================================
 
+data "tls_certificate" "github" {
   url = "https://token.actions.githubusercontent.com"
 }
+
 resource "aws_iam_openid_connect_provider" "github" {
-
   url = "https://token.actions.githubusercontent.com"
-
 
   client_id_list = [
     "sts.amazonaws.com"
   ]
 
-
   thumbprint_list = [
     data.tls_certificate.github.certificates[0].sha1_fingerprint
   ]
 }
+
+
+# ============================================================
+# GitHub Actions OIDC Trust Policy
+# ============================================================
+
 data "aws_iam_policy_document" "github_assume" {
 
   statement {
 
     effect = "Allow"
 
-
     principals {
-
       type = "Federated"
 
       identifiers = [
@@ -32,12 +37,11 @@ data "aws_iam_policy_document" "github_assume" {
       ]
     }
 
-
     actions = [
       "sts:AssumeRoleWithWebIdentity"
     ]
 
-
+    # GitHub OIDC audience
     condition {
 
       test = "StringEquals"
@@ -49,26 +53,55 @@ data "aws_iam_policy_document" "github_assume" {
       ]
     }
 
+    # GitHub immutable OIDC subject
+    #
+    # Repository:
+    # Arifjmi/ecs-production-cicd
+    #
+    # Owner ID:
+    # 148271832
+    #
+    # Repository ID:
+    # 1387248610
+    #
+    # Branch:
+    # main
 
     condition {
 
-      test = "StringLike"
+      test = "StringEquals"
 
       variable = "token.actions.githubusercontent.com:sub"
 
       values = [
-        "repo:${var.github_org}/${var.github_repo}:ref:refs/heads/main"
+        "repo:Arifjmi@148271832/ecs-production-cicd@1387248610:ref:refs/heads/main"
       ]
     }
   }
 }
+
+
+# ============================================================
+# GitHub Actions IAM Role
+# ============================================================
+
 resource "aws_iam_role" "github_actions" {
 
   name = "${local.name}-github-actions"
 
   assume_role_policy = data.aws_iam_policy_document.github_assume.json
 }
+
+
+# ============================================================
+# GitHub Actions Deployment Permissions
+# ============================================================
+
 data "aws_iam_policy_document" "github_deploy" {
+
+  # ----------------------------------------------------------
+  # ECR Authentication
+  # ----------------------------------------------------------
 
   statement {
 
@@ -83,6 +116,10 @@ data "aws_iam_policy_document" "github_deploy" {
     ]
   }
 
+
+  # ----------------------------------------------------------
+  # Push Docker Image to ECR
+  # ----------------------------------------------------------
 
   statement {
 
@@ -102,6 +139,10 @@ data "aws_iam_policy_document" "github_deploy" {
   }
 
 
+  # ----------------------------------------------------------
+  # ECS Deployment
+  # ----------------------------------------------------------
+
   statement {
 
     effect = "Allow"
@@ -119,6 +160,10 @@ data "aws_iam_policy_document" "github_deploy" {
   }
 
 
+  # ----------------------------------------------------------
+  # Pass ECS Task Execution Role
+  # ----------------------------------------------------------
+
   statement {
 
     effect = "Allow"
@@ -134,6 +179,10 @@ data "aws_iam_policy_document" "github_deploy" {
 }
 
 
+# ============================================================
+# Attach Deployment Policy to GitHub Actions Role
+# ============================================================
+
 resource "aws_iam_role_policy" "github_deploy" {
 
   name = "${local.name}-github-deploy"
@@ -142,4 +191,3 @@ resource "aws_iam_role_policy" "github_deploy" {
 
   policy = data.aws_iam_policy_document.github_deploy.json
 }
-
