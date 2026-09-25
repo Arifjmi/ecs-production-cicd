@@ -10,69 +10,72 @@ permissions:
   contents: read
 
 env:
-
   AWS_REGION: ap-south-1
-
   ECR_REPOSITORY: production-ecs-cicd-app
-
   ECS_CLUSTER: production-ecs-cicd
-
   ECS_SERVICE: production-ecs-cicd-service
-
   ECS_TASK_FAMILY: production-ecs-cicd
-
   CONTAINER_NAME: app
-
 
 jobs:
 
+  # ============================================================
+  # JOB 1 - TEST APPLICATION
+  # ============================================================
 
   test:
-
     name: Test Application
-
     runs-on: ubuntu-latest
 
     steps:
 
+      # --------------------------------------------------------
+      # Checkout source code
+      # --------------------------------------------------------
+
       - name: Checkout
         uses: actions/checkout@v4
 
+      # --------------------------------------------------------
+      # Install Node.js
+      # --------------------------------------------------------
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
-
         with:
-          node-version: 18
-
+          node-version: 24
           cache: npm
+          cache-dependency-path: package-lock.json
 
-          cache-dependency-path: app/package-lock.json
-
+      # --------------------------------------------------------
+      # Install dependencies
+      # --------------------------------------------------------
 
       - name: Install dependencies
-        working-directory: app
         run: npm ci
 
+      # --------------------------------------------------------
+      # Start application
+      # --------------------------------------------------------
 
       - name: Start application
-        working-directory: app
-
         run: |
-
           npm start > app.log 2>&1 &
-
           sleep 3
 
+      # --------------------------------------------------------
+      # Run application tests
+      # --------------------------------------------------------
 
       - name: Run tests
-        working-directory: app
-
         run: npm test
 
 
-  build-and-deploy:
+  # ============================================================
+  # JOB 2 - BUILD AND DEPLOY
+  # ============================================================
 
+  build-and-deploy:
     name: Build and Deploy
 
     needs: test
@@ -81,66 +84,64 @@ jobs:
 
     steps:
 
+      # --------------------------------------------------------
+      # Checkout source code
+      # --------------------------------------------------------
 
       - name: Checkout
         uses: actions/checkout@v4
 
+      # --------------------------------------------------------
+      # Configure AWS using GitHub OIDC
+      # --------------------------------------------------------
 
       - name: Configure AWS credentials
-
         uses: aws-actions/configure-aws-credentials@v4
-
         with:
-
           role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
-
           aws-region: ${{ env.AWS_REGION }}
 
+      # --------------------------------------------------------
+      # Login to Amazon ECR
+      # --------------------------------------------------------
 
       - name: Login to Amazon ECR
-
         id: login-ecr
-
         uses: aws-actions/amazon-ecr-login@v2
 
+      # --------------------------------------------------------
+      # Build Docker image
+      # --------------------------------------------------------
 
       - name: Build Docker image
-
         env:
-
           ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
-
           IMAGE_TAG: ${{ github.sha }}
-
         run: |
-
           docker build \
             -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG \
-            ./app
+            .
 
+      # --------------------------------------------------------
+      # Push Docker image to ECR
+      # --------------------------------------------------------
 
       - name: Push Docker image
-
         env:
-
           ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
-
           IMAGE_TAG: ${{ github.sha }}
-
         run: |
-
           docker push \
             $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
 
+      # --------------------------------------------------------
+      # Prepare ECS task definition
+      # --------------------------------------------------------
 
       - name: Prepare ECS task definition
-
         env:
-
           ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
-
           IMAGE_TAG: ${{ github.sha }}
-
         run: |
 
           ACCOUNT_ID=$(aws sts get-caller-identity \
@@ -157,11 +158,12 @@ jobs:
             task-definition.json \
             > rendered-task-definition.json
 
+      # --------------------------------------------------------
+      # Register new ECS task definition revision
+      # --------------------------------------------------------
 
       - name: Register ECS task definition
-
         id: register-task
-
         run: |
 
           TASK_DEF_ARN=$(aws ecs register-task-definition \
@@ -171,9 +173,14 @@ jobs:
 
           echo "TASK_DEF_ARN=$TASK_DEF_ARN" >> "$GITHUB_ENV"
 
+          echo "Registered task definition:"
+          echo "$TASK_DEF_ARN"
+
+      # --------------------------------------------------------
+      # Deploy ECS service
+      # --------------------------------------------------------
 
       - name: Deploy ECS service
-
         run: |
 
           aws ecs update-service \
@@ -183,23 +190,31 @@ jobs:
             --desired-count 2 \
             --force-new-deployment
 
+      # --------------------------------------------------------
+      # Wait for ECS deployment
+      # --------------------------------------------------------
 
       - name: Wait for ECS service stability
-
         run: |
 
           aws ecs wait services-stable \
             --cluster "$ECS_CLUSTER" \
             --services "$ECS_SERVICE"
 
+      # --------------------------------------------------------
+      # Deployment summary
+      # --------------------------------------------------------
 
       - name: Deployment summary
-
         run: |
 
+          echo "=========================================="
           echo "Deployment successful"
-
+          echo "=========================================="
           echo "Commit: $GITHUB_SHA"
-
           echo "Task Definition: $TASK_DEF_ARN"
-
+          echo "ECS Cluster: $ECS_CLUSTER"
+          echo "ECS Service: $ECS_SERVICE"
+          echo "ECR Repository: $ECR_REPOSITORY"
+          echo "AWS Region: $AWS_REGION"
+          echo "=========================================="
