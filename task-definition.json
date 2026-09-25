@@ -1,0 +1,46 @@
+{
+  "family": "production-ecs-cicd",
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": [
+    "EC2"
+  ],
+  "cpu": "256",
+  "memory": "512",
+  "executionRoleArn": "EXECUTION_ROLE_ARN",
+  "containerDefinitions": [
+    {
+      "name": "app",
+      "image": "IMAGE_URI",
+      "essential": true,
+      "cpu": 256,
+      "memory": 512,
+      "user": "node",
+      "readonlyRootFilesystem": true,
+      "portMappings": [
+        {
+          "containerPort": 3000,
+          "protocol": "tcp"
+        }
+      ],
+      "healthCheck": {
+        "command": [
+          "CMD-SHELL",
+          "wget --no-verbose --tries=1 --spider http://127.0.0.1:3000/health || exit 1"
+        ],
+        "interval": 30,
+        "timeout": 5,
+        "retries": 3,
+        "startPeriod": 10
+      },
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/production-ecs-cicd",
+          "awslogs-region": "ap-south-1",
+          "awslogs-stream-prefix": "app"
+        }
+      }
+    }
+  ]
+}
+

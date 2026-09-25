@@ -1,0 +1,205 @@
+name: Production ECS CI/CD
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+
+  AWS_REGION: ap-south-1
+
+  ECR_REPOSITORY: production-ecs-cicd-app
+
+  ECS_CLUSTER: production-ecs-cicd
+
+  ECS_SERVICE: production-ecs-cicd-service
+
+  ECS_TASK_FAMILY: production-ecs-cicd
+
+  CONTAINER_NAME: app
+
+
+jobs:
+
+
+  test:
+
+    name: Test Application
+
+    runs-on: ubuntu-latest
+
+    steps:
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+
+        with:
+          node-version: 18
+
+          cache: npm
+
+          cache-dependency-path: app/package-lock.json
+
+
+      - name: Install dependencies
+        working-directory: app
+        run: npm ci
+
+
+      - name: Start application
+        working-directory: app
+
+        run: |
+
+          npm start > app.log 2>&1 &
+
+          sleep 3
+
+
+      - name: Run tests
+        working-directory: app
+
+        run: npm test
+
+
+  build-and-deploy:
+
+    name: Build and Deploy
+
+    needs: test
+
+    runs-on: ubuntu-latest
+
+    steps:
+
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+
+      - name: Configure AWS credentials
+
+        uses: aws-actions/configure-aws-credentials@v4
+
+        with:
+
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+
+          aws-region: ${{ env.AWS_REGION }}
+
+
+      - name: Login to Amazon ECR
+
+        id: login-ecr
+
+        uses: aws-actions/amazon-ecr-login@v2
+
+
+      - name: Build Docker image
+
+        env:
+
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+
+          IMAGE_TAG: ${{ github.sha }}
+
+        run: |
+
+          docker build \
+            -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG \
+            ./app
+
+
+      - name: Push Docker image
+
+        env:
+
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+
+          IMAGE_TAG: ${{ github.sha }}
+
+        run: |
+
+          docker push \
+            $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+
+
+      - name: Prepare ECS task definition
+
+        env:
+
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+
+          IMAGE_TAG: ${{ github.sha }}
+
+        run: |
+
+          ACCOUNT_ID=$(aws sts get-caller-identity \
+            --query Account \
+            --output text)
+
+          EXECUTION_ROLE_ARN="arn:aws:iam::$ACCOUNT_ID:role/production-ecs-cicd-task-execution-role"
+
+          IMAGE_URI="$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
+
+          sed \
+            -e "s|EXECUTION_ROLE_ARN|$EXECUTION_ROLE_ARN|g" \
+            -e "s|IMAGE_URI|$IMAGE_URI|g" \
+            task-definition.json \
+            > rendered-task-definition.json
+
+
+      - name: Register ECS task definition
+
+        id: register-task
+
+        run: |
+
+          TASK_DEF_ARN=$(aws ecs register-task-definition \
+            --cli-input-json file://rendered-task-definition.json \
+            --query 'taskDefinition.taskDefinitionArn' \
+            --output text)
+
+          echo "TASK_DEF_ARN=$TASK_DEF_ARN" >> "$GITHUB_ENV"
+
+
+      - name: Deploy ECS service
+
+        run: |
+
+          aws ecs update-service \
+            --cluster "$ECS_CLUSTER" \
+            --service "$ECS_SERVICE" \
+            --task-definition "$TASK_DEF_ARN" \
+            --desired-count 2 \
+            --force-new-deployment
+
+
+      - name: Wait for ECS service stability
+
+        run: |
+
+          aws ecs wait services-stable \
+            --cluster "$ECS_CLUSTER" \
+            --services "$ECS_SERVICE"
+
+
+      - name: Deployment summary
+
+        run: |
+
+          echo "Deployment successful"
+
+          echo "Commit: $GITHUB_SHA"
+
+          echo "Task Definition: $TASK_DEF_ARN"
+

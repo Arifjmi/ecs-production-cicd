@@ -1,0 +1,13 @@
+{
+  "name": "ecs-production-cicd",
+  "version": "1.0.0",
+  "description": "Production style ECS CI/CD project",
+  "main": "app.js",
+  "scripts": {
+    "start": "node app.js",
+    "test": "node test.js"
+  },
+  "author": "Arif",
+  "license": "MIT"
+}
+
